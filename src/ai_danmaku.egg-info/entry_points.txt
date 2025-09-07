@@ -1,0 +1,2 @@
+[console_scripts]
+ai-danmaku = ai_danmaku.cli:main

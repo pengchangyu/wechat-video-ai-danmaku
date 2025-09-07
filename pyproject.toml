@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ai-danmaku"
+version = "0.1.0"
+description = "WeChat Video Channel AI Danmaku Assistant (offline-first MVP)"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{name = "Emagen AI"}]
+dependencies = [
+  "selenium>=4.22.0",
+]
+
+[project.scripts]
+ai-danmaku = "ai_danmaku.cli:main"
+
+[tool.setuptools.package-dir]
+"" = "src"
+
