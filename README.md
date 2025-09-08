@@ -59,3 +59,40 @@ Grant Accessibility permissions to allow keyboard and mouse automation:
 - Robust input detection without manual calibration
 - Read live chat text (OCR/AX) and ASR for host speech
 - Persona and interaction strategy engine
+
+---
+
+## Phase 2: Live Comments OCR (Cloud, OpenAI)
+
+This phase uses cloud OCR via OpenAI to read comments from a WeChat Channels live room. Local Vision OCR is disabled by default.
+
+### Setup
+
+1) Grant Screen Recording permission:
+   - System Settings → Privacy & Security → Screen Recording → enable for your Terminal (or Python/IDE).
+2) Build the OCR tool (auto on first run; manual build if needed):
+
+```bash
+scripts/build_ocr.sh
+```
+
+### Usage in App
+
+1) In the GUI:
+   - Click “捕捉评论区左上/右下”以标定评论区域。
+   - 在“云 OCR（OpenAI）”处填写并保存 API Key，选择模型与间隔。
+   - 点击“开始抓取评论”启动云 OCR；点击“停止抓取评论”停止。
+
+2) Behind the scenes:
+   - The app periodically screenshots the calibrated region, sends it to OpenAI, and writes structured results to JSONL with timestamps.
+
+### Logs
+
+- Cloud OCR results: `logs/ocr.openai.jsonl` (one JSON per line: `{ts, model, image, lines, raw}`)
+- Cloud screenshots: `logs/frames/cloud-*.png`
+- App log: `logs/app.log` (includes cloud-ocr start/stop/errors)
+
+### Notes
+
+- OCR depends on visual clarity of the comments area; if accuracy is low, re-calibrate the region and consider light/dark theme contrast.
+- FPS range 0.5–10 is supported; 1–3 is recommended for steady accuracy/performance.

@@ -14,7 +14,14 @@ data/
 
 # Logs
 *.log
+logs/
+logs/**
+
+# Local config (contains API keys and coordinates)
+config.json
+
+# Local binaries
+scripts/wxocr
 
 # Node/others (just in case)
 node_modules/
-

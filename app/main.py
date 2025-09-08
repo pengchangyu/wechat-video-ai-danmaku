@@ -6,6 +6,9 @@ import tkinter as tk
 from tkinter import messagebox
 
 from macos.osascript import activate_wechat, quit_wechat, paste_via_applescript_and_return, paste_only_via_applescript, grant_permissions_hint
+import threading
+import queue
+import base64
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_PATH = os.path.join(ROOT_DIR, 'config.json')
@@ -30,6 +33,12 @@ class App(tk.Tk):
         # Larger default size; allow resizing
         self.geometry('1100x720')
         self.resizable(True, True)
+        # Grid layout: allow middle column to expand
+        try:
+            for c in range(4):
+                self.grid_columnconfigure(c, weight=1 if c == 1 else 0)
+        except Exception:
+            pass
         # Improve readability on HiDPI
         try:
             self.tk.call('tk', 'scaling', 1.25)
@@ -54,6 +63,24 @@ class App(tk.Tk):
                 self.send_btn_pos = (float(self.cfg['send_button_position'][0]), float(self.cfg['send_button_position'][1]))
         except Exception:
             self.send_btn_pos = None
+
+        # Comments region: [x1, y1, x2, y2]
+        self.comments_rect = None
+        try:
+            cr = self.cfg.get('comments_region')
+            if isinstance(cr, list) and len(cr) == 4:
+                self.comments_rect = (float(cr[0]), float(cr[1]), float(cr[2]), float(cr[3]))
+        except Exception:
+            self.comments_rect = None
+
+        # OCR runtime (cloud-only)
+        self.ocr_proc = None
+        self.ocr_thread = None
+        self.ocr_stop = threading.Event()
+        self.ocr_queue = queue.Queue()
+        self.recent_texts = []  # [(ts, text)]
+        # Cloud OCR
+        self.cloud_thread = None
 
         # Controls
         row = 0
@@ -123,6 +150,48 @@ class App(tk.Tk):
         row += 1
         tk.Label(self, text='提示：若回车不发送，请校准“发送按钮位置”，程序将粘贴后点击按钮提交。').grid(row=row, column=0, columnspan=3, pady=6, sticky='w')
 
+        # --- Comments OCR Section ---
+        row += 1
+        tk.Label(self, text='第二阶段：抓取直播间评论（云 OCR）', font=('Helvetica', 15, 'bold')).grid(row=row, column=0, columnspan=3, pady=10, sticky='w')
+        row += 1
+        tk.Button(self, text='捕捉评论区左上', command=self.capture_comments_tl_cmd, width=18).grid(row=row, column=0, padx=6, pady=4)
+        tk.Button(self, text='捕捉评论区右下', command=self.capture_comments_br_cmd, width=18).grid(row=row, column=1, padx=6, pady=4)
+        self.comments_label = tk.Label(self, text=self._comments_text())
+        self.comments_label.grid(row=row, column=2, sticky='w')
+        row += 1
+        tk.Button(self, text='开始抓取评论', command=self.start_ocr_cmd, width=16).grid(row=row, column=2, sticky='w')
+        row += 1
+        tk.Button(self, text='停止抓取评论', command=self.stop_ocr_cmd, width=16).grid(row=row, column=2, sticky='w')
+        row += 1
+        # Cloud OCR (OpenAI)
+        tk.Label(self, text='云 OCR（OpenAI）').grid(row=row, column=0, sticky='e')
+        self.cloud_enabled_var = tk.BooleanVar(value=True)
+        tk.Checkbutton(self, text='启用', variable=self.cloud_enabled_var).grid(row=row, column=1, sticky='w')
+        tk.Label(self, text='间隔(秒)').grid(row=row, column=2, sticky='e')
+        self.cloud_interval_var = tk.DoubleVar(value=5.0)
+        tk.Entry(self, textvariable=self.cloud_interval_var, width=8).grid(row=row, column=3, sticky='w')
+        row += 1
+        tk.Label(self, text='OpenAI API Key').grid(row=row, column=0, sticky='e')
+        self.openai_key_var = tk.StringVar(value=self.cfg.get('openai_api_key', os.environ.get('OPENAI_API_KEY', '')))
+        tk.Entry(self, textvariable=self.openai_key_var, width=44, show='*').grid(row=row, column=1, columnspan=2, sticky='w')
+        tk.Button(self, text='保存Key', command=self.save_openai_key_cmd, width=10).grid(row=row, column=3, sticky='w')
+        row += 1
+        tk.Label(self, text='OpenAI 模型').grid(row=row, column=0, sticky='e')
+        # Default to gpt-4o; if config仍为旧的 mini，则提升为 gpt-4o
+        default_model = 'gpt-4o'
+        cfg_model = self.cfg.get('openai_model')
+        if cfg_model in (None, '', 'gpt-4o-mini'):
+            self.cfg['openai_model'] = default_model
+            try:
+                save_config(self.cfg)
+            except Exception:
+                pass
+            cfg_model = default_model
+        self.openai_model_var = tk.StringVar(value=cfg_model)
+        tk.OptionMenu(self, self.openai_model_var, 'gpt-4o-mini', 'gpt-4o').grid(row=row, column=1, sticky='w')
+        row += 1
+        tk.Label(self, text='说明：需授予“屏幕录制”权限；调高 FPS 会占用更多 CPU。').grid(row=row, column=0, columnspan=4, pady=6, sticky='w')
+
         # Keyboard shortcuts
         try:
             # Cmd+Enter and Ctrl+Enter to send
@@ -136,6 +205,9 @@ class App(tk.Tk):
 
     def _pos_text(self):
         return f"输入框坐标: {self.input_pos}" if self.input_pos else "输入框坐标: 未设置"
+
+    def _comments_text(self):
+        return f"评论区: {self.comments_rect}" if self.comments_rect else "评论区: 未设置"
 
     def quit_wechat_cmd(self):
         quit_wechat()
@@ -327,6 +399,294 @@ class App(tk.Tk):
         except Exception as e:
             messagebox.showerror('捕捉失败', f'无法获取鼠标位置: {e}')
             self._log(f'capture send-btn failed: {e}')
+
+    def capture_comments_tl_cmd(self):
+        try:
+            for i in range(3, 0, -1):
+                self.status_var.set(f'将在 {i} 秒后捕捉评论区左上…将鼠标移到左上角')
+                self.update(); time.sleep(1)
+            try:
+                if not self.state() == 'iconic' and self.minimize_var.get():
+                    self.iconify(); time.sleep(0.1)
+            except Exception:
+                pass
+            self.update_idletasks()
+            x = self.winfo_pointerx(); y = self.winfo_pointery()
+            # If we already have BR, keep it; else placeholder
+            if self.comments_rect:
+                _, _, x2, y2 = self.comments_rect
+                self.comments_rect = (float(x), float(y), float(x2), float(y2))
+            else:
+                self.comments_rect = (float(x), float(y), float(x), float(y))
+            self.cfg['comments_region'] = [self.comments_rect[0], self.comments_rect[1], self.comments_rect[2], self.comments_rect[3]]
+            save_config(self.cfg)
+            self.comments_label.config(text=self._comments_text())
+            self.status_var.set(f'已记录评论区左上: {x}, {y}')
+            try:
+                self.deiconify(); self.lift()
+            except Exception:
+                pass
+            self._log(f'captured comments TL {x},{y}')
+        except Exception as e:
+            messagebox.showerror('捕捉失败', f'无法获取鼠标位置: {e}')
+            self._log(f'capture comments TL failed: {e}')
+
+    def capture_comments_br_cmd(self):
+        try:
+            for i in range(3, 0, -1):
+                self.status_var.set(f'将在 {i} 秒后捕捉评论区右下…将鼠标移到右下角')
+                self.update(); time.sleep(1)
+            try:
+                if not self.state() == 'iconic' and self.minimize_var.get():
+                    self.iconify(); time.sleep(0.1)
+            except Exception:
+                pass
+            self.update_idletasks()
+            x = self.winfo_pointerx(); y = self.winfo_pointery()
+            if self.comments_rect:
+                x1, y1, _, _ = self.comments_rect
+            else:
+                x1, y1 = float(x), float(y)
+            self.comments_rect = (float(x1), float(y1), float(x), float(y))
+            self.cfg['comments_region'] = [self.comments_rect[0], self.comments_rect[1], self.comments_rect[2], self.comments_rect[3]]
+            save_config(self.cfg)
+            self.comments_label.config(text=self._comments_text())
+            self.status_var.set(f'已记录评论区右下: {x}, {y}')
+            try:
+                self.deiconify(); self.lift()
+            except Exception:
+                pass
+            self._log(f'captured comments BR {x},{y}')
+        except Exception as e:
+            messagebox.showerror('捕捉失败', f'无法获取鼠标位置: {e}')
+            self._log(f'capture comments BR failed: {e}')
+
+    def _ensure_wxocr(self):
+        try:
+            click_bin = os.path.join(ROOT_DIR, 'scripts', 'wxocr')
+            if not os.path.exists(click_bin):
+                build_sh = os.path.join(ROOT_DIR, 'scripts', 'build_ocr.sh')
+                self._log('wxocr not found; attempting build_ocr.sh')
+                r = subprocess.run(["bash", build_sh], capture_output=True, text=True)
+                self._log(f'build_ocr rc={r.returncode} out={r.stdout!r} err={r.stderr!r}')
+            return os.path.join(ROOT_DIR, 'scripts', 'wxocr')
+        except Exception as e:
+            self._log(f'ensure wxocr failed: {e}')
+            return None
+
+    def start_ocr_cmd(self):
+        if self.ocr_proc is not None or (self.cloud_thread is not None and self.cloud_thread.is_alive()):
+            messagebox.showinfo('已在运行', '评论抓取已在运行。')
+            return
+        if not self.comments_rect:
+            messagebox.showwarning('未设置区域', '请先捕捉评论区左上/右下坐标。')
+            return
+        try:
+            self.ocr_stop.clear()
+            self.ocr_log_file = os.path.join(self.log_path, 'ocr.log')
+            # 本地 OCR 已禁用：不再启动 wxocr 进程
+            self.ocr_proc = None
+            self.ocr_thread = None
+            # Cloud OCR thread
+            if self.cloud_enabled_var.get():
+                self.cloud_thread = threading.Thread(target=self._cloud_ocr_loop, daemon=True)
+                self.cloud_thread.start()
+            self.status_var.set('评论抓取已启动')
+            self._log('ocr started (cloud-only)')
+        except Exception as e:
+            self._log(f'ocr start failed: {e}')
+            messagebox.showerror('启动失败', f'无法启动 OCR：{e}')
+
+    def stop_ocr_cmd(self):
+        self.ocr_stop.set()
+        if self.ocr_proc is not None:
+            try:
+                self.ocr_proc.terminate()
+            except Exception:
+                pass
+            self.ocr_proc = None
+        # No hard join to avoid GUI block; threads are daemons and will exit
+        self.status_var.set('评论抓取已停止')
+        self._log('ocr stopped')
+
+    def _ocr_reader(self):
+        # Read stdout lines (JSON per frame), write new comments to ocr.log with de-dup
+        try:
+            if self.ocr_proc is None or self.ocr_proc.stdout is None:
+                return
+            for line in self.ocr_proc.stdout:
+                if self.ocr_stop.is_set():
+                    break
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                    ts = data.get('ts')
+                    lines = data.get('lines', [])
+                    new_count = 0
+                    for item in lines:
+                        text = (item.get('text') or '').strip()
+                        if not text:
+                            continue
+                        # Basic noise filter: keep Chinese lines or sufficiently long tokens
+                        try:
+                            if not any('\u4e00' <= ch <= '\u9fff' for ch in text) and len(text) < 3:
+                                continue
+                        except Exception:
+                            pass
+                        if self._dedupe_seen(text):
+                            continue
+                        self._append_ocr_log(ts, text)
+                        new_count += 1
+                    if new_count:
+                        self.status_var.set(f'OCR 新评论: {new_count}')
+                except Exception as e:
+                    self._log(f'ocr parse error: {e}')
+        except Exception as e:
+            self._log(f'ocr reader error: {e}')
+
+    def _dedupe_seen(self, text: str, window_size: int = 200, ttl_sec: float = 60.0) -> bool:
+        now = time.time()
+        # expire
+        self.recent_texts = [(t, s) for (t, s) in self.recent_texts if now - t < ttl_sec]
+        for _, s in self.recent_texts:
+            if s == text:
+                return True
+        self.recent_texts.append((now, text))
+        if len(self.recent_texts) > window_size:
+            self.recent_texts = self.recent_texts[-window_size:]
+        return False
+
+    def _append_ocr_log(self, ts: str, text: str):
+        try:
+            with open(self.ocr_log_file, 'a', encoding='utf-8') as f:
+                f.write(f'[{ts}] {text}\n')
+        except Exception:
+            pass
+
+
+    def save_openai_key_cmd(self):
+        try:
+            key = (self.openai_key_var.get() or '').strip()
+            if not key:
+                messagebox.showwarning('Key 为空', '请输入 OpenAI API Key。')
+                return
+            self.cfg['openai_api_key'] = key
+            self.cfg['openai_model'] = self.openai_model_var.get()
+            save_config(self.cfg)
+            messagebox.showinfo('已保存', 'OpenAI Key 已保存到本地配置（仅本机）。')
+        except Exception as e:
+            self._log(f'save_openai_key failed: {e}')
+            messagebox.showerror('保存失败', f'无法保存 Key：{e}')
+
+    def _cloud_ocr_loop(self):
+        try:
+            # Resolve API key
+            api_key = (self.openai_key_var.get() or '').strip() or os.environ.get('OPENAI_API_KEY', '')
+            if not api_key:
+                self._log('cloud-ocr: no API key; disabled')
+                return
+            try:
+                interval = float(self.cloud_interval_var.get())
+            except Exception:
+                interval = 5.0
+            interval = max(2.0, min(60.0, interval))
+            model = self.openai_model_var.get()
+            frames_dir = os.path.join(self.log_path, 'frames')
+            os.makedirs(frames_dir, exist_ok=True)
+            out_jsonl = os.path.join(self.log_path, 'ocr.openai.jsonl')
+            self._log(f'cloud-ocr started interval={interval}s model={model}')
+            while not self.ocr_stop.is_set():
+                # Capture
+                if not self.comments_rect:
+                    time.sleep(0.5); continue
+                x1, y1, x2, y2 = self.comments_rect
+                rx, ry = int(min(x1, x2)), int(min(y1, y2))
+                rw, rh = int(abs(x2 - x1)), int(abs(y2 - y1))
+                if rw <= 0 or rh <= 0:
+                    time.sleep(0.5); continue
+                ts = time.strftime('%Y%m%d-%H%M%S')
+                img_path = os.path.join(frames_dir, f'cloud-{ts}.png')
+                r = subprocess.run(['screencapture', '-x', '-R', f'{rx},{ry},{rw},{rh}', img_path], capture_output=True, text=True)
+                if r.returncode != 0 or not os.path.exists(img_path):
+                    self._log(f'cloud-ocr capture fail rc={r.returncode} err={r.stderr!r}')
+                    # Sleep a bit and retry next loop
+                    for _ in range(int(interval * 10)):
+                        if self.ocr_stop.is_set(): break
+                        time.sleep(0.1)
+                    continue
+                # Encode image as data URI
+                try:
+                    with open(img_path, 'rb') as f:
+                        b64 = base64.b64encode(f.read()).decode('ascii')
+                    data_uri = f'data:image/png;base64,{b64}'
+                except Exception as e:
+                    self._log(f'cloud-ocr encode fail: {e}')
+                    time.sleep(1.0)
+                    continue
+                # Build payload: relaxed prompt -> pure transcription (one line per comment)
+                prompt = (
+                    '只做OCR逐行转写：按屏幕从上到下输出评论文本，尽量还原中文与表情。'
+                    '只输出纯文本，每条评论占一行，不要任何解释或附加内容。'
+                )
+                payload = {
+                    'model': model,
+                    'messages': [
+                        {
+                            'role': 'user',
+                            'content': [
+                                {'type': 'text', 'text': prompt},
+                                {'type': 'image_url', 'image_url': {'url': data_uri, 'detail': 'high'}},
+                            ],
+                        }
+                    ],
+                    'max_tokens': 1200,
+                }
+                try:
+                    import urllib.request, urllib.error
+                    req = urllib.request.Request(
+                        url='https://api.openai.com/v1/chat/completions',
+                        data=json.dumps(payload).encode('utf-8'),
+                        headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'},
+                        method='POST',
+                    )
+                    with urllib.request.urlopen(req, timeout=60) as resp:
+                        raw = resp.read().decode('utf-8', errors='replace')
+                    resp_obj = json.loads(raw)
+                    content = ''
+                    try:
+                        content = resp_obj['choices'][0]['message']['content']
+                    except Exception:
+                        content = raw
+                    # Parse pure-text lines into list
+                    lines = []
+                    for ln in (content or '').splitlines():
+                        s = ln.strip()
+                        if s:
+                            lines.append(s)
+                    rec = {
+                        'ts': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+                        'model': model,
+                        'image': img_path,
+                        'lines': lines,
+                        'raw': content,
+                    }
+                    with open(out_jsonl, 'a', encoding='utf-8') as f:
+                        f.write(json.dumps(rec, ensure_ascii=False) + '\n')
+                    self.status_var.set('云OCR 已写入一批结果')
+                except Exception as e:
+                    self._log(f'cloud-ocr request fail: {e}')
+                # sleep until next
+                for _ in range(int(interval * 10)):
+                    if self.ocr_stop.is_set():
+                        break
+                    time.sleep(0.1)
+            self._log('cloud-ocr stopped')
+        except Exception as e:
+            self._log(f'cloud-ocr loop error: {e}')
+
+    # frame saver removed (cloud-only mode)
 
     def _log(self, msg: str):
         try:
