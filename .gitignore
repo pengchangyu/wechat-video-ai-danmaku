@@ -16,6 +16,8 @@ data/
 *.log
 logs/
 logs/**
+logs/audio/
+logs/audio/**
 
 # Local config (contains API keys and coordinates)
 config.json

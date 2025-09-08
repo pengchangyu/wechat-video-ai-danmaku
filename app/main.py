@@ -203,6 +203,31 @@ class App(tk.Tk):
         except Exception:
             pass
 
+        # --- ASR (Mic) Section ---
+        row += 1
+        tk.Label(self, text='第三阶段：ASR（麦克风外放）', font=('Helvetica', 15, 'bold')).grid(row=row, column=0, columnspan=4, pady=10, sticky='w')
+        row += 1
+        tk.Label(self, text='设备(avfoundation)').grid(row=row, column=0, sticky='e')
+        self.asr_device_var = tk.StringVar(value=self.cfg.get('asr_device', ':0'))
+        tk.Entry(self, textvariable=self.asr_device_var, width=16).grid(row=row, column=1, sticky='w')
+        tk.Label(self, text='分段(秒)').grid(row=row, column=2, sticky='e')
+        self.asr_seg_var = tk.IntVar(value=int(self.cfg.get('asr_segment_secs', 6)))
+        tk.Entry(self, textvariable=self.asr_seg_var, width=8).grid(row=row, column=3, sticky='w')
+        row += 1
+        tk.Label(self, text='模型').grid(row=row, column=0, sticky='e')
+        self.asr_model_var = tk.StringVar(value=self.cfg.get('asr_model', 'small'))
+        tk.Entry(self, textvariable=self.asr_model_var, width=16).grid(row=row, column=1, sticky='w')
+        tk.Label(self, text='compute').grid(row=row, column=2, sticky='e')
+        self.asr_compute_var = tk.StringVar(value=self.cfg.get('asr_compute', 'int8_float16'))
+        tk.Entry(self, textvariable=self.asr_compute_var, width=16).grid(row=row, column=3, sticky='w')
+        row += 1
+        tk.Button(self, text='开始ASR', command=self.start_asr_cmd, width=16).grid(row=row, column=0, sticky='w', padx=6)
+        tk.Button(self, text='停止ASR', command=self.stop_asr_cmd, width=16).grid(row=row, column=1, sticky='w', padx=6)
+        tk.Button(self, text='列出设备', command=self.list_audio_devs_cmd, width=16).grid(row=row, column=2, sticky='w', padx=6)
+        row += 1
+        tk.Label(self, text='ASR 输出：logs/asr.jsonl（每段一行）').grid(row=row, column=0, columnspan=4, sticky='w')
+        row += 1
+
     def _pos_text(self):
         return f"输入框坐标: {self.input_pos}" if self.input_pos else "输入框坐标: 未设置"
 
@@ -685,6 +710,79 @@ class App(tk.Tk):
             self._log('cloud-ocr stopped')
         except Exception as e:
             self._log(f'cloud-ocr loop error: {e}')
+
+    # === ASR Mic integration ===
+    def start_asr_cmd(self):
+        # Persist config
+        try:
+            self.cfg['asr_device'] = self.asr_device_var.get()
+            self.cfg['asr_segment_secs'] = int(self.asr_seg_var.get())
+            self.cfg['asr_model'] = self.asr_model_var.get()
+            self.cfg['asr_compute'] = self.asr_compute_var.get()
+            save_config(self.cfg)
+        except Exception:
+            pass
+        try:
+            seg = max(3, min(15, int(self.asr_seg_var.get())))
+        except Exception:
+            seg = 6
+        device_spec = self.asr_device_var.get() or ':0'
+        env = os.environ.copy()
+        env['SEG_SECS'] = str(seg)
+        env['DEVICE_SPEC'] = device_spec
+        audio_dir = os.path.join(self.log_path, 'audio')
+        os.makedirs(audio_dir, exist_ok=True)
+        # 录音进程（ffmpeg 分段）
+        rec_sh = os.path.join(ROOT_DIR, 'scripts', 'asr_mic.sh')
+        try:
+            self.asr_rec_proc = subprocess.Popen(['bash', rec_sh], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+        except Exception as e:
+            self._log(f'asr rec start fail: {e}')
+            messagebox.showerror('ASR启动失败', f'无法启动录音：{e}')
+            return
+        # 转写进程（faster-whisper）
+        asr_py = os.path.join(ROOT_DIR, 'asr', 'transcribe.py')
+        asr_out = os.path.join(self.log_path, 'asr.jsonl')
+        env2 = os.environ.copy()
+        env2['FWHISPER_MODEL'] = self.asr_model_var.get()
+        env2['FWHISPER_DEVICE'] = 'auto'
+        env2['FWHISPER_COMPUTE'] = self.asr_compute_var.get()
+        try:
+            self.asr_proc = subprocess.Popen(['python3', asr_py, '--watch', audio_dir, '--out', asr_out], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env2)
+        except Exception as e:
+            self._log(f'asr transcriber start fail: {e}')
+            messagebox.showerror('ASR启动失败', f'无法启动转写：{e}')
+            try:
+                self.asr_rec_proc.terminate()
+            except Exception:
+                pass
+            return
+        self.status_var.set('ASR 已启动（麦克风外放）')
+        self._log('asr started (mic)')
+
+    def stop_asr_cmd(self):
+        for p in ['asr_proc', 'asr_rec_proc']:
+            proc = getattr(self, p, None)
+            if proc is not None:
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
+                setattr(self, p, None)
+        self.status_var.set('ASR 已停止')
+        self._log('asr stopped')
+
+    def list_audio_devs_cmd(self):
+        try:
+            out = subprocess.run(['bash', os.path.join(ROOT_DIR, 'scripts', 'audio_devices.sh')], capture_output=True, text=True)
+            if out.returncode == 0:
+                messagebox.showinfo('音频设备', out.stdout[:4000])
+                self._log('audio devices listed')
+            else:
+                messagebox.showerror('错误', out.stderr)
+        except Exception as e:
+            self._log(f'list audio devs error: {e}')
+            messagebox.showerror('错误', str(e))
 
     # frame saver removed (cloud-only mode)
 
