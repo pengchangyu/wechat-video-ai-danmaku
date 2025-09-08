@@ -17,6 +17,7 @@ scripts/start.sh
 4) In the app:
    - Click “激活微信” (optional)
    - Click “捕捉输入框位置” → 在倒计时内把鼠标移到直播间输入框上（自动记录坐标）
+   - If Return does not send, also “捕捉发送按钮位置” and enable click-send flow
    - Optionally adjust delay and keep “发送时最小化本应用” enabled
    - Optionally enable “使用坐标点击聚焦输入框”（若你的系统权限允许）
    - Enter a message and click “发送到直播间” (the app activates WeChat, optionally clicks the saved position to focus, then pastes + Return)
@@ -49,6 +50,8 @@ Grant Accessibility permissions to allow keyboard and mouse automation:
 - Use input box center-left when capturing coordinates to avoid edge hits.
 - Increase `延时(秒)` if WeChat takes longer to come to foreground.
 - If click focuses but paste doesn’t appear, increase `点击后延时(秒)` (e.g., 0.8–1.0s).
+- If Return inserts a newline instead of sending, capture “发送按钮位置”. The app pastes then clicks the button; fallback to Return if not set.
+- Shortcuts: `Cmd+Enter`/`Ctrl+Enter` to send, `F7` capture input, `F8` capture send button.
 - Enable `双击聚焦` so the app clicks the input twice (with `第二次点击延时`) to ensure the caret enters the text field on live pages that expand the input on first click.
 
 ## Roadmap

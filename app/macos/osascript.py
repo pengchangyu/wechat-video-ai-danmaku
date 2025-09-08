@@ -26,9 +26,17 @@ def paste_via_applescript_and_return():
     return osa(script)
 
 
+def paste_only_via_applescript():
+    script = (
+        'tell application "System Events"\n'
+        '  keystroke "v" using {command down}\n'
+        'end tell'
+    )
+    return osa(script)
+
+
 def grant_permissions_hint() -> str:
     return (
         "On macOS, grant Accessibility permissions to Terminal/iTerm or the built app:\n"
         "System Settings > Privacy & Security > Accessibility > enable for your terminal/Python."
     )
-
