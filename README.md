@@ -45,6 +45,12 @@ Grant Accessibility permissions to allow keyboard and mouse automation:
   - `scripts/build_clicker.sh`
 - This compiles `tools/wxclick.swift` into `scripts/wxclick` used for reliable click focus.
 
+### Tips
+- Use input box center-left when capturing coordinates to avoid edge hits.
+- Increase `延时(秒)` if WeChat takes longer to come to foreground.
+- If click focuses but paste doesn’t appear, increase `点击后延时(秒)` (e.g., 0.8–1.0s).
+- Enable `双击聚焦` so the app clicks the input twice (with `第二次点击延时`) to ensure the caret enters the text field on live pages that expand the input on first click.
+
 ## Roadmap
 
 - Robust input detection without manual calibration

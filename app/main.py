@@ -78,6 +78,20 @@ class App(tk.Tk):
         tk.Checkbutton(self, text='使用坐标点击聚焦输入框', variable=self.use_click_var).grid(row=row, column=1, columnspan=2, sticky='w')
         row += 1
 
+        tk.Label(self, text='点击后延时(秒)').grid(row=row, column=0, sticky='e')
+        self.post_click_delay_var = tk.DoubleVar(value=0.8)
+        tk.Entry(self, textvariable=self.post_click_delay_var, width=8).grid(row=row, column=1, sticky='w')
+        row += 1
+
+        self.double_click_var = tk.BooleanVar(value=True)
+        tk.Checkbutton(self, text='双击聚焦（展开后再点一次）', variable=self.double_click_var).grid(row=row, column=1, columnspan=2, sticky='w')
+        row += 1
+
+        tk.Label(self, text='第二次点击延时(秒)').grid(row=row, column=0, sticky='e')
+        self.second_click_delay_var = tk.DoubleVar(value=0.5)
+        tk.Entry(self, textvariable=self.second_click_delay_var, width=8).grid(row=row, column=1, sticky='w')
+        row += 1
+
         self.countdown_only_var = tk.BooleanVar(value=True)
         tk.Checkbutton(self, text='仅倒计时发送（不激活/不点击，需手动先点到输入框）', variable=self.countdown_only_var).grid(row=row, column=1, columnspan=2, sticky='w')
         row += 1
@@ -156,7 +170,28 @@ class App(tk.Tk):
                     _ = subprocess.run(["bash", build_sh], capture_output=True, text=True)
                 r = subprocess.run([click_bin, str(x), str(y)], capture_output=True, text=True)
                 self._log(f'wxclick rc={r.returncode} out={r.stdout!r} err={r.stderr!r}')
-                time.sleep(0.05)
+                # Extra wait after click to allow the input to become editable
+                try:
+                    post_delay = float(self.post_click_delay_var.get())
+                except Exception:
+                    post_delay = 0.8
+                post_delay = max(0.0, post_delay)
+                self._log(f'post-click sleep {post_delay}s before paste')
+                time.sleep(post_delay)
+
+                # Optional second click to ensure caret enters the text field
+                if self.double_click_var.get():
+                    try:
+                        sec_delay = float(self.second_click_delay_var.get())
+                    except Exception:
+                        sec_delay = 0.5
+                    sec_delay = max(0.0, sec_delay)
+                    self._log(f'second-click after {sec_delay}s')
+                    time.sleep(sec_delay)
+                    r2 = subprocess.run([click_bin, str(x), str(y)], capture_output=True, text=True)
+                    self._log(f'wxclick second rc={r2.returncode} out={r2.stdout!r} err={r2.stderr!r}')
+                    # small settle time
+                    time.sleep(0.1)
             except Exception as e:
                 self._log(f'wxclick error: {e}')
                 self.status_var.set(f'点击聚焦失败，已跳过')
