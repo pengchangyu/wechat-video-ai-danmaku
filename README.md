@@ -1,34 +1,52 @@
-# 微信视频号 AI 弹幕助手（离线优先 MVP）
+# 微信视频号助手（阶段一：发送消息 MVP）
 
-目标：在微信视频号直播中充当“像真人观众”的 AI 弹幕助手，离线优先，仅登录/观看直播需联网。
+Minimal macOS helper to send messages into a WeChat Channels (视频号) live room via GUI automation.
 
-快速路线（macOS M1 开发环境）：
-- 浏览器自动化：Selenium + SafariDriver（macOS 自带）
-- 半自动发送：终端审核后，自动粘贴+回车，或 DOM 选择器发送
-- 本地 TTS：macOS `say` 命令，产出音频并归档
-- 存储：SQLite 记录弹幕、ASR(预留)、生成文案、发送日志
-- LLM：优先使用本地 Ollama，如不可用则启用简单模板回退
+## Quick Start
 
-开发运行（首次）
-1) 在 Safari 菜单：Develop -> Allow Remote Automation（需先在 Safari 偏好设置启用 Develop 菜单）
-2) 打开视频号直播页并登录（保持页面可用）
-3) 终端执行：
+1) Grant permissions: System Settings → Privacy & Security → Accessibility → enable for your Terminal (or Python).
+
+2) Run app:
+
 ```bash
-uv run python -m ai_danmaku.cli --live-url "<直播页面URL>" --semi
+scripts/start.sh
 ```
 
-注意：
-- 半自动模式会在终端提示，先在 Safari 聚焦弹幕输入框，再回车确认发送。
-- 若需 DOM 精准发送，编辑 `config.yaml` 填入 CSS 选择器。
+3) In WeChat, open a 视频号直播间.
 
-目录
-- docs/PRD.md：产品需求与验收标准
-- docs/TECH_DESIGN.md：技术方案与模块接口
-- src/ai_danmaku：源代码
-- data/: 运行期产生的数据库与音频归档
+4) In the app:
+   - Click “激活微信” (optional)
+   - Click “捕捉输入框位置” → 在倒计时内把鼠标移到直播间输入框上（自动记录坐标）
+   - Optionally adjust delay and keep “发送时最小化本应用” enabled
+   - Optionally enable “使用坐标点击聚焦输入框”（若你的系统权限允许）
+   - Enter a message and click “发送到直播间” (the app activates WeChat, optionally clicks the saved position to focus, then pastes + Return)
 
-一键启动/停止
-- 首次赋权：`chmod +x start.sh stop.sh`
-- 启动（默认半自动）：`./start.sh`
-  - 环境变量可选：`LIVE_URL`（覆盖 config.json）、`INTERVAL=45`、`SEMI=1|0`
-- 停止：`./stop.sh`
+5) Stop app:
+
+```bash
+scripts/stop.sh
+```
+
+## Notes
+
+- Works on macOS only (AppleScript via System Events + Swift clicker for mouse click).
+- Clipboard is used to paste text (Cmd+V) and press Return to send.
+- If sending fails, verify Accessibility permissions and recalibrate the input position.
+
+### Accessibility
+Grant Accessibility permissions to allow keyboard and mouse automation:
+- System Settings → Privacy & Security → Accessibility → enable your Terminal (or Python/IDE).
+
+### Logs
+- App writes logs to `logs/app.log` with timestamps for troubleshooting.
+
+### Build Swift Clicker (optional, auto-built on first send)
+- To build manually:
+  - `scripts/build_clicker.sh`
+- This compiles `tools/wxclick.swift` into `scripts/wxclick` used for reliable click focus.
+
+## Roadmap
+
+- Robust input detection without manual calibration
+- Read live chat text (OCR/AX) and ASR for host speech
+- Persona and interaction strategy engine
