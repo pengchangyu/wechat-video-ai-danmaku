@@ -27,3 +27,6 @@ scripts/wxocr
 
 # Node/others (just in case)
 node_modules/
+-e 
+# Local vendor (not tracked)
+faster-whisper/
