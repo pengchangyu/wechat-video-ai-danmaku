@@ -1,0 +1,33 @@
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Local data/runtime
+data/
+!data/.gitkeep
+
+# Logs
+*.log
+logs/
+logs/**
+logs/audio/
+logs/audio/**
+
+# Local config (contains API keys and coordinates)
+config.json
+
+# Local binaries
+scripts/wxocr
+
+# Node/others (just in case)
+node_modules/
+-e 
+# Local vendor (not tracked)
+faster-whisper/
+config.json
