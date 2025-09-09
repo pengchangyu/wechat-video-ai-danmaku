@@ -17,10 +17,9 @@ fi
 
 echo "Recording from avfoundation device ${DEVICE_SPEC} in ${SEG_SECS}s segments... (Ctrl+C to stop)"
 
-# High-pass + normalizer to help with external speaker capture
-ffmpeg -hide_banner -f avfoundation -i "$DEVICE_SPEC" \
+# Replace shell with ffmpeg so signals (TERM/KILL) are delivered directly to recorder process
+exec ffmpeg -hide_banner -f avfoundation -i "$DEVICE_SPEC" \
   -ac 1 -ar "$SR" \
   -af "highpass=f=150, dynaudnorm=f=150:g=15" \
   -f segment -segment_time "$SEG_SECS" -reset_timestamps 1 \
   -c:a pcm_s16le "$LOG_DIR/seg-%03d.wav"
-

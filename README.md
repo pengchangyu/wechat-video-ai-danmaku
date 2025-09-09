@@ -92,6 +92,25 @@ scripts/build_ocr.sh
 - Cloud screenshots: `logs/frames/cloud-*.png`
 - App log: `logs/app.log` (includes cloud-ocr start/stop/errors)
 
+### ASR (Mic) outputs
+
+- Audio segments: `logs/audio/seg-*.wav` (default 6s each)
+- Transcripts: `logs/asr.jsonl` (one JSON per segment; `result.text` contains text)
+- Recorder log: `logs/asr_recorder.log`
+- Worker log: `logs/asr_worker.log`
+
+## Phase 4: DeepSeek Agent
+
+- Purpose: Aggregate OCR comments + ASR transcripts, ask DeepSeek for a short, human-like reply, and optionally auto-send via the existing WeChat sender.
+- Enable in app under “DeepSeek Agent（自动互动）”. Configure:
+  - `DeepSeek API Key`, `模型` (e.g., `deepseek-chat`), `API Base` (default `https://api.deepseek.com/v1/chat/completions`)
+  - Poll interval and auto-send toggle (keep off initially)
+- Outputs:
+  - `logs/agent.jsonl` — one JSON per decision: `{ts, prompt_preview, reply, auto_sent}`
+- Notes:
+  - The agent uses recent OCR lines and ASR text (last few items) as context.
+  - Keep auto-send off for initial validation; turn on once results look good.
+
 ### Notes
 
 - OCR depends on visual clarity of the comments area; if accuracy is low, re-calibrate the region and consider light/dark theme contrast.
