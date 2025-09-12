@@ -90,6 +90,9 @@ if [[ ! -f "$CFG" ]]; then
   "agent_ignore_history": true,
   "agent_min_interval": 10,
   "agent_max_per_min": 4,
+  "agent_random_interval": false,
+  "agent_random_min": 8,
+  "agent_random_max": 18,
   "agent_persona": "你是直播间的友好观众，用中文自然口吻简短回应，避免敏感内容。限制：不超过40字；可适度使用表情；没内容就返回空字符串。"
 }
 JSON
@@ -123,4 +126,3 @@ echo "1) Launch app: scripts/start.sh"
 echo "2) Calibrate: 输入框/发送按钮/评论区矩形"
 echo "3) Fill keys in UI if you skipped here; edit 人设与频控"
 echo "4) Click 一键开始"
-

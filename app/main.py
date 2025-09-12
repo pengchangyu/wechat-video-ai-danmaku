@@ -12,6 +12,7 @@ import base64
 import signal
 import urllib.request
 import urllib.error
+import random
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_PATH = os.path.join(ROOT_DIR, 'config.json')
@@ -61,6 +62,14 @@ class App(tk.Tk):
             pass
 
         self.cfg = load_config()
+        # One-time migration: if legacy config had auto_send disabled and no migration flag, enable by default once
+        try:
+            if (self.cfg.get('agent_auto_send') is False) and (not bool(self.cfg.get('auto_send_migrated', False))):
+                self.cfg['agent_auto_send'] = True
+                self.cfg['auto_send_migrated'] = True
+                save_config(self.cfg)
+        except Exception:
+            pass
         self.log_path = os.path.join(ROOT_DIR, 'logs')
         os.makedirs(self.log_path, exist_ok=True)
         self.log_file = os.path.join(self.log_path, 'app.log')
@@ -109,9 +118,16 @@ class App(tk.Tk):
         self.agent_seen_asr_set = set()
         self.agent_seen_asr_list = []
 
-        # Scrollable container
+        # Header (minimal controls)
+        header = tk.Frame(self)
+        header.pack(fill='x', padx=8, pady=6)
+        tk.Button(header, text='启动微信', command=self.activate_wechat_cmd, width=12).pack(side='left', padx=4)
+        tk.Button(header, text='一键开始', command=self.start_all_cmd, width=12).pack(side='left', padx=6)
+        tk.Button(header, text='一键停止', command=self.stop_all_cmd, width=12).pack(side='left', padx=4)
+        tk.Button(header, text='高级设置', command=self._toggle_advanced, width=12).pack(side='right', padx=4)
+
+        # Scrollable container (advanced settings)
         container = tk.Frame(self)
-        container.pack(fill='both', expand=True)
         canvas = tk.Canvas(container, highlightthickness=0)
         vbar = tk.Scrollbar(container, orient='vertical', command=canvas.yview)
         canvas.configure(yscrollcommand=vbar.set)
@@ -119,21 +135,28 @@ class App(tk.Tk):
         canvas.pack(side='left', fill='both', expand=True)
         self.content = tk.Frame(canvas)
         canvas.create_window((0, 0), window=self.content, anchor='nw')
+        # Throttled scrollregion updater to reduce toggle lag
+        self._sr_job = None
         def _on_cfg(event):
-            canvas.configure(scrollregion=canvas.bbox('all'))
+            try:
+                if self._sr_job:
+                    self.after_cancel(self._sr_job)
+                self._sr_job = self.after(20, lambda: self._update_scrollregion())
+            except Exception:
+                pass
         self.content.bind('<Configure>', _on_cfg)
+        # Hide advanced by default
+        self._advanced_container = container
+        self._advanced_canvas = canvas
+        self._advanced_visible = False
 
         # Controls
         row = 0
-        tk.Label(self.content, text='第一阶段：在直播间中自动发送消息', font=('Helvetica', 16, 'bold')).grid(row=row, column=0, columnspan=3, pady=10, sticky='w')
+        tk.Label(self.content, text='高级设置', font=('Helvetica', 16, 'bold')).grid(row=row, column=0, columnspan=3, pady=10, sticky='w')
         row += 1
 
         tk.Button(self.content, text='退出微信', command=self.quit_wechat_cmd, width=14).grid(row=row, column=0, padx=6, pady=4)
-        tk.Button(self.content, text='激活微信', command=self.activate_wechat_cmd, width=14).grid(row=row, column=1, padx=6, pady=4)
-        tk.Button(self.content, text='权限提示', command=self.perm_hint_cmd, width=14).grid(row=row, column=2, padx=6, pady=4)
-        tk.Button(self.content, text='一键开始', command=self.start_all_cmd, width=14).grid(row=row, column=3, padx=6, pady=4)
-        row += 1
-        tk.Button(self.content, text='一键停止', command=self.stop_all_cmd, width=14).grid(row=row, column=3, padx=6, pady=4)
+        tk.Button(self.content, text='权限提示', command=self.perm_hint_cmd, width=14).grid(row=row, column=1, padx=6, pady=4)
         row += 1
 
         # Calibration UI
@@ -276,7 +299,8 @@ class App(tk.Tk):
         # --- Agent (DeepSeek) Section ---
         tk.Label(self.content, text='第四阶段：DeepSeek Agent（自动互动）', font=('Helvetica', 15, 'bold')).grid(row=row, column=0, columnspan=4, pady=10, sticky='w')
         row += 1
-        self.agent_enabled_var = tk.BooleanVar(value=False)
+        # Agent enable default: enabled unless explicitly disabled in config
+        self.agent_enabled_var = tk.BooleanVar(value=bool(self.cfg.get('agent_enabled', True)))
         tk.Checkbutton(self.content, text='启用 Agent（试验性）', variable=self.agent_enabled_var).grid(row=row, column=0, sticky='w')
         tk.Label(self.content, text='轮询间隔(秒)').grid(row=row, column=1, sticky='e')
         self.agent_interval_var = tk.DoubleVar(value=float(self.cfg.get('agent_interval', 10)))
@@ -294,15 +318,51 @@ class App(tk.Tk):
         self.deepseek_base_var = tk.StringVar(value=self.cfg.get('deepseek_base', 'https://api.deepseek.com/v1/chat/completions'))
         tk.Entry(self.content, textvariable=self.deepseek_base_var, width=38).grid(row=row, column=3, sticky='w')
         row += 1
-        self.agent_auto_send_var = tk.BooleanVar(value=bool(self.cfg.get('agent_auto_send', False)))
+        # Auto-send default: enabled unless explicitly disabled in config
+        self.agent_auto_send_var = tk.BooleanVar(value=bool(self.cfg.get('agent_auto_send', True)))
         tk.Checkbutton(self.content, text='自动发送（谨慎开启）', variable=self.agent_auto_send_var).grid(row=row, column=0, sticky='w')
         self.agent_ignore_history_var = tk.BooleanVar(value=bool(self.cfg.get('agent_ignore_history', True)))
         tk.Checkbutton(self.content, text='启动时忽略历史（只读新内容）', variable=self.agent_ignore_history_var).grid(row=row, column=1, sticky='w')
         tk.Button(self.content, text='启动Agent', command=self.start_agent_cmd, width=14).grid(row=row, column=2, sticky='w')
         tk.Button(self.content, text='停止Agent', command=self.stop_agent_cmd, width=14).grid(row=row, column=3, sticky='w')
         row += 1
-        tk.Label(self.content, text='说明：Agent 聚合评论/语音转写，经 DeepSeek 生成简短回复；建议先关闭自动发送，仅记录建议。').grid(row=row, column=0, columnspan=4, sticky='w')
+        # Rate limiting controls (min interval only)
+        tk.Label(self.content, text='最小间隔(秒)').grid(row=row, column=0, sticky='e')
+        self.agent_min_interval_var = tk.IntVar(value=int(self.cfg.get('agent_min_interval', 30)))
+        tk.Entry(self.content, textvariable=self.agent_min_interval_var, width=10).grid(row=row, column=1, sticky='w')
         row += 1
+
+        # Random interval controls (simulate human timing)
+        self.agent_random_var = tk.BooleanVar(value=bool(self.cfg.get('agent_random_interval', False)))
+        tk.Checkbutton(self.content, text='随机轮询间隔', variable=self.agent_random_var).grid(row=row, column=0, sticky='w')
+        tk.Label(self.content, text='最小(秒)').grid(row=row, column=1, sticky='e')
+        self.agent_random_min_var = tk.DoubleVar(value=float(self.cfg.get('agent_random_min', 60)))
+        tk.Entry(self.content, textvariable=self.agent_random_min_var, width=10).grid(row=row, column=2, sticky='w')
+        tk.Label(self.content, text='最大(秒)').grid(row=row, column=3, sticky='e')
+        self.agent_random_max_var = tk.DoubleVar(value=float(self.cfg.get('agent_random_max', 180)))
+        # put entry for max seconds below the label column for alignment
+        row += 1
+        tk.Entry(self.content, textvariable=self.agent_random_max_var, width=10).grid(row=row, column=3, sticky='w')
+        row += 1
+
+        # Persona editor (multi-line)
+        tk.Label(self.content, text='人设/风格').grid(row=row, column=0, sticky='ne')
+        default_persona = self.cfg.get('agent_persona', '你是直播间的友好观众，用中文自然口吻简短回应，避免敏感内容。限制：不超过40字；可适度使用表情；没内容就返回空字符串。')
+        self.agent_persona_txt = tk.Text(self.content, width=60, height=5)
+        try:
+            self.agent_persona_txt.insert('1.0', default_persona)
+        except Exception:
+            pass
+        self.agent_persona_txt.grid(row=row, column=1, columnspan=3, sticky='we', pady=4)
+        row += 1
+
+        tk.Label(self.content, text='说明：Agent 聚合评论/语音转写，经 DeepSeek 生成简短回复；可配置人设与随机/最小间隔策略。').grid(row=row, column=0, columnspan=4, sticky='w')
+        row += 1
+        # After building UI, schedule onboarding if needed
+        try:
+            self.after(300, self._maybe_onboarding)
+        except Exception:
+            pass
 
     def _pos_text(self):
         return f"输入框坐标: {self.input_pos}" if self.input_pos else "输入框坐标: 未设置"
@@ -1001,6 +1061,83 @@ class App(tk.Tk):
         self.status_var.set('一键停止：已停止 OCR/ASR/Agent')
         self._log('one-click stop issued')
 
+    def _toggle_advanced(self):
+        try:
+            if not hasattr(self, '_advanced_container'):
+                return
+            if self._advanced_visible:
+                self._advanced_container.pack_forget()
+                self._advanced_visible = False
+            else:
+                self._advanced_container.pack(fill='both', expand=True)
+                # Schedule scrollregion recalculation (idle) to avoid synchronous lag
+                try:
+                    self.after_idle(self._update_scrollregion)
+                except Exception:
+                    pass
+                self._advanced_visible = True
+        except Exception:
+            pass
+
+    def _update_scrollregion(self):
+        try:
+            self._sr_job = None
+            if hasattr(self, '_advanced_canvas'):
+                self._advanced_canvas.configure(scrollregion=self._advanced_canvas.bbox('all'))
+        except Exception:
+            pass
+
+    def _maybe_onboarding(self):
+        try:
+            needs = []
+            if not (self.cfg.get('openai_api_key') or '').strip():
+                needs.append('OpenAI Key')
+            if not (self.cfg.get('deepseek_api_key') or '').strip():
+                needs.append('DeepSeek Key')
+            # Check calibrations
+            if not self.input_pos or self.input_pos == (0, 0):
+                needs.append('输入框定位')
+            if not self.send_btn_pos or self.send_btn_pos == (0, 0):
+                needs.append('发送按钮定位')
+            cr = self.comments_rect
+            if not cr or cr == (0, 0, 0, 0):
+                needs.append('评论区定位')
+            if not needs:
+                return
+            # build simple onboarding dialog
+            top = tk.Toplevel(self)
+            top.title('首次设置引导')
+            top.geometry('520x360')
+            tk.Label(top, text='完成以下设置后可一键启动', font=('Helvetica', 13, 'bold')).pack(pady=6)
+            frm = tk.Frame(top); frm.pack(fill='both', expand=True, padx=8, pady=6)
+            tk.Label(frm, text='OpenAI API Key').grid(row=0, column=0, sticky='e')
+            oai_var = tk.StringVar(value=(self.cfg.get('openai_api_key') or ''))
+            tk.Entry(frm, textvariable=oai_var, show='*', width=40).grid(row=0, column=1, sticky='w')
+            tk.Label(frm, text='DeepSeek API Key').grid(row=1, column=0, sticky='e')
+            dsk_var = tk.StringVar(value=(self.cfg.get('deepseek_api_key') or ''))
+            tk.Entry(frm, textvariable=dsk_var, show='*', width=40).grid(row=1, column=1, sticky='w')
+            # Calibration helpers
+            row = 2
+            tk.Label(frm, text='定位步骤：').grid(row=row, column=0, sticky='ne');
+            stepf = tk.Frame(frm); stepf.grid(row=row, column=1, sticky='w'); row+=1
+            tk.Button(stepf, text='捕捉输入框位置', command=self.capture_input_pos_cmd).pack(anchor='w', pady=2)
+            tk.Button(stepf, text='捕捉发送按钮位置', command=self.capture_send_btn_pos_cmd).pack(anchor='w', pady=2)
+            tk.Button(stepf, text='捕捉评论区左上', command=self.capture_comments_tl_cmd).pack(anchor='w', pady=2)
+            tk.Button(stepf, text='捕捉评论区右下', command=self.capture_comments_br_cmd).pack(anchor='w', pady=2)
+
+            def save_and_close():
+                try:
+                    self.cfg['openai_api_key'] = oai_var.get().strip()
+                    self.cfg['deepseek_api_key'] = dsk_var.get().strip()
+                    save_config(self.cfg)
+                except Exception:
+                    pass
+                top.destroy()
+
+            tk.Button(top, text='保存并完成', command=save_and_close, width=16).pack(pady=8)
+        except Exception:
+            pass
+
     def _clear_history(self):
         # Truncate/remove previous OCR/ASR/Agent outputs and segments/images
         try:
@@ -1061,7 +1198,7 @@ class App(tk.Tk):
             self.cfg['deepseek_base'] = self.deepseek_base_var.get()
             self.cfg['agent_interval'] = float(self.agent_interval_var.get())
             self.cfg['agent_auto_send'] = bool(self.agent_auto_send_var.get())
-            # persona & rate limits
+            # persona & rate limits & random interval
             try:
                 persona = self.agent_persona_txt.get('1.0', 'end').strip()
             except Exception:
@@ -1070,11 +1207,14 @@ class App(tk.Tk):
             try:
                 self.cfg['agent_min_interval'] = int(self.agent_min_interval_var.get())
             except Exception:
-                self.cfg['agent_min_interval'] = 10
+                self.cfg['agent_min_interval'] = 30
             try:
-                self.cfg['agent_max_per_min'] = int(self.agent_max_per_min_var.get())
+                self.cfg['agent_random_interval'] = bool(self.agent_random_var.get())
+                self.cfg['agent_random_min'] = float(self.agent_random_min_var.get())
+                self.cfg['agent_random_max'] = float(self.agent_random_max_var.get())
             except Exception:
-                self.cfg['agent_max_per_min'] = 4
+                pass
+            self.cfg['agent_enabled'] = bool(self.agent_enabled_var.get())
             self.cfg['agent_ignore_history'] = bool(self.agent_ignore_history_var.get())
             save_config(self.cfg)
             messagebox.showinfo('已保存', 'DeepSeek 配置已保存。')
@@ -1116,9 +1256,18 @@ class App(tk.Tk):
             out_jsonl = os.path.join(self.log_path, 'agent.jsonl')
             ocr_path = os.path.join(self.log_path, 'ocr.openai.jsonl')
             asr_path = os.path.join(self.log_path, 'asr.jsonl')
-            interval = float(self.agent_interval_var.get() or 10)
-            interval = max(5.0, min(60.0, interval))
             while not self.agent_stop.is_set():
+                # Compute polling interval (supports random range via advanced settings saved in cfg)
+                try:
+                    if bool(self.cfg.get('agent_random_interval', False)):
+                        imin = float(self.cfg.get('agent_random_min', 8))
+                        imax = float(self.cfg.get('agent_random_max', 18))
+                        interval = max(2.0, min(60.0, random.uniform(min(imin, imax), max(imin, imax))))
+                    else:
+                        interval = float(self.agent_interval_var.get() or self.cfg.get('agent_interval', 10))
+                        interval = max(2.0, min(60.0, interval))
+                except Exception:
+                    interval = 10.0
                 # Read new OCR lines
                 ocr_lines = self._read_new_ocr_lines(ocr_path)
                 asr_texts = self._read_new_asr_lines(asr_path)
@@ -1165,19 +1314,10 @@ class App(tk.Tk):
             try:
                 min_iv = int(self.agent_min_interval_var.get())
             except Exception:
-                min_iv = 10
+                min_iv = 30
             if hasattr(self, 'agent_send_times') and self.agent_send_times:
                 if now - self.agent_send_times[-1] < max(1, min_iv):
                     return False
-            # per-minute cap
-            try:
-                cap = int(self.agent_max_per_min_var.get())
-            except Exception:
-                cap = 4
-            window_start = now - 60
-            recent = [t for t in getattr(self, 'agent_send_times', []) if t >= window_start]
-            if len(recent) >= max(1, cap):
-                return False
             return True
         except Exception:
             return True
