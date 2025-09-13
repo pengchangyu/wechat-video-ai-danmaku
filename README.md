@@ -2,6 +2,20 @@
 
 Minimal macOS helper to send messages into a WeChat Channels (视频号) live room via GUI automation.
 
+## Teammate Setup (Clone & Run)
+
+- Prereqs: macOS, Python3 (with Tk), Xcode Command Line Tools (`xcode-select --install`), and `ffmpeg` (`brew install ffmpeg` for ASR).
+- Permissions: System Settings → Privacy & Security → Accessibility (Terminal/Python) and Screen Recording (for OCR screenshots).
+- Config:
+  - Copy `config.example.json` to `config.json` and fill your own API keys, or export env vars (e.g., `OPENAI_API_KEY`). Keep `agent_auto_send=false` initially.
+  - Calibrate coordinates in the GUI: input box, send button, and comments region.
+- Run:
+  - `scripts/start.sh` to open the GUI; follow on-screen steps (send test, then cloud OCR, optional ASR, optional Agent).
+- Stop:
+  - `scripts/stop.sh`.
+
+Notes: `config.json` is intentionally not tracked (secrets). Do not commit your keys. Use `config.example.json` as a template.
+
 ## Quick Start
 
 1) Grant permissions: System Settings → Privacy & Security → Accessibility → enable for your Terminal (or Python).

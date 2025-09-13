@@ -23,6 +23,7 @@ logs/audio/**
 config.json
 
 # Local binaries
+scripts/wxclick
 scripts/wxocr
 
 # Node/others (just in case)
